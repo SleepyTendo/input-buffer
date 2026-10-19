@@ -4,80 +4,73 @@
 
 using namespace geode::prelude;
 
-// How it works
-// ------------
-// If you click while a click can't do anything yet (cube/robot/ball/spider in
-// the air and not touching an orb), the click is remembered for N frames.
-// We keep the button held for you until the moment it can be used (you land,
-// or you reach an orb), let the game use it exactly once, and then release it
-// right away so it never turns into an extra jump. If the window runs out
-// first, the click is simply dropped.
+// Input Buffer: look-ahead click timing
+// -------------------------------------
+// When you click, the mod saves the level state and quietly simulates the
+// next moments with your click placed 0, 1, 2 ... N physics steps later.
+// It picks the earliest placement where you survive the look-ahead window,
+// rewinds, and then plays your click on that step for real. If no placement
+// survives, the click happens right away, exactly like vanilla.
 
 constexpr int kJump = 1;
+
+// ---------- settings ----------
 
 static bool modEnabled() {
 	return Mod::get()->getSettingValue<bool>("enabled");
 }
 
-static float windowSeconds() {
+static int maxDelaySteps() {
 	auto frames = Mod::get()->getSettingValue<int64_t>("extra-frames");
-	return static_cast<float>(frames) / 60.f;
+	auto unit = Mod::get()->getSettingValue<std::string>("frame-unit");
+	int stepsPerFrame = unit.rfind("60", 0) == 0 ? 4 : 1; // 60 FPS frame = 4 physics steps
+	return static_cast<int>(frames) * stepsPerFrame;
 }
 
-// Gamemodes where a click in mid-air already does something on its own,
-// so there is nothing to buffer.
-static bool clickAlwaysActs(PlayerObject* p) {
-	return p->m_isShip || p->m_isDart || p->m_isBird || p->m_isSwing;
+static int lookAheadSteps() {
+	return static_cast<int>(Mod::get()->getSettingValue<int64_t>("look-ahead"));
 }
 
-static bool canUseClickNow(PlayerObject* p) {
-	if (!p) return false;
-	if (clickAlwaysActs(p)) return true;
-	if (p->m_isOnGround) return true;
-	if (p->m_touchingRings && p->m_touchingRings->count() > 0) return true;
-	return false;
+// Hold modes keep the button down; everything else is treated as a tap.
+static bool isHoldMode(PlayerObject* p) {
+	return p && (p->m_isShip || p->m_isDart || p->m_isSwing);
 }
 
-struct PlayerSnapshot {
-	bool valid = false;
-	bool onGround = false;
-	bool upsideDown = false;
-	bool dashing = false;
-	size_t ringsUsed = 0;
+// ---------- simulation state shared with the death hook ----------
+
+static bool g_simulating = false;
+static bool g_simDied = false;
+
+struct StepArgs {
+	float dt;
+	bool half;
+	bool last;
 };
 
-static PlayerSnapshot snapshot(PlayerObject* p) {
-	PlayerSnapshot s;
-	if (!p) return s;
-	s.valid = true;
-	s.onGround = p->m_isOnGround;
-	s.upsideDown = p->m_isUpsideDown;
-	s.dashing = p->m_isDashing;
-	s.ringsUsed = p->m_touchedRings.size();
-	return s;
-}
-
-// Did this player just do something with the held click during the last step?
-static bool clickWasUsed(PlayerSnapshot const& before, PlayerObject* p) {
-	if (!before.valid || !p) return false;
-	if (p->m_touchedRings.size() > before.ringsUsed) return true;   // hit an orb
-	if (!before.dashing && p->m_isDashing) return true;            // dash orb
-	if (before.onGround && !p->m_isOnGround) return true;         // jumped off the ground
-	if (before.upsideDown != p->m_isUpsideDown) return true;      // ball / spider flip
-	return false;
-}
-
 class $modify(BufferedLayer, GJBaseGameLayer) {
-	struct Pending {
-		bool active = false;    // an early click is being buffered
-		bool released = false;  // the real button is already up; we're holding it for you
-		float remaining = 0.f;
-		bool isPlayer1 = true;  // the flag the game expects for this input
+	struct Scheduled {
+		bool active = false;          // a click is waiting for its chosen step
+		int stepsLeft = 0;            // steps until we press for real
+		bool isPlayer1 = true;
+		bool releaseRequested = false;// the real button came up before we pressed
 	};
 
 	struct Fields {
-		Pending pending[2];
+		Scheduled sched[2];
+		bool releaseNextStep[2] = { false, false };
+		bool releaseIsPlayer1[2] = { true, true };
+		bool decisionPending[2] = { false, false }; // press arrived mid-step
+		bool decisionIsPlayer1[2] = { true, true };
+		bool insideStep = false;
+		std::vector<StepArgs> framePattern;   // step args of the last full frame
+		std::vector<StepArgs> currentFrame;
+		size_t stepInFrame = 0;
 	};
+
+	PlayLayer* asPlayLayer() {
+		auto pl = PlayLayer::get();
+		return (pl && static_cast<GJBaseGameLayer*>(pl) == this) ? pl : nullptr;
+	}
 
 	bool isTwoPlayer() {
 		return m_levelSettings && m_levelSettings->m_twoPlayerMode;
@@ -87,111 +80,183 @@ class $modify(BufferedLayer, GJBaseGameLayer) {
 		return (isTwoPlayer() && !isPlayer1) ? 1 : 0;
 	}
 
-	// The players a click from this slot controls.
-	std::vector<PlayerObject*> playersFor(int slot) {
-		std::vector<PlayerObject*> out;
-		if (isTwoPlayer()) {
-			auto p = slot == 0 ? m_player1 : m_player2;
-			if (p) out.push_back(p);
-		}
-		else {
-			if (m_player1) out.push_back(m_player1);
-			if (m_player2 && m_gameState.m_isDualMode) out.push_back(m_player2);
-		}
-		return out;
+	PlayerObject* mainPlayerFor(int slot) {
+		return (isTwoPlayer() && slot == 1) ? m_player2 : m_player1;
 	}
 
-	void releaseSlot(int slot) {
-		auto& p = m_fields->pending[slot];
-		bool needsRelease = p.active && p.released;
-		p.active = false;
-		p.released = false;
-		if (needsRelease) GJBaseGameLayer::handleButton(false, kJump, p.isPlayer1);
+	StepArgs simArgs(size_t k) {
+		auto& pat = m_fields->framePattern;
+		if (pat.empty()) return { 1.f / 240.f, false, true };
+		return pat[(m_fields->stepInFrame + k) % pat.size()];
+	}
+
+	// Run the vanilla step, bypassing our own processCommands logic.
+	void rawStep(StepArgs const& a) {
+		GJBaseGameLayer::processCommands(a.dt, a.half, a.last);
+	}
+
+	// Simulate placing the press `delay` steps from now. True if the player survives.
+	bool survivesWithDelay(int delay, bool isPlayer1, bool tap, int horizon) {
+		g_simDied = false;
+		g_simulating = true;
+		for (int k = 0; k < horizon; ++k) {
+			if (k == delay) GJBaseGameLayer::handleButton(true, kJump, isPlayer1);
+			if (tap && k == delay + 1) GJBaseGameLayer::handleButton(false, kJump, isPlayer1);
+			rawStep(simArgs(k));
+			if (g_simDied) break;
+		}
+		g_simulating = false;
+		return !g_simDied;
+	}
+
+	// Decide on which step (0..max) the press should land. Restores all state.
+	int chooseDelay(bool isPlayer1) {
+		auto pl = asPlayLayer();
+		if (!pl || m_playerDied) return 0;
+
+		int maxDelay = maxDelaySteps();
+		int horizon = lookAheadSteps();
+		bool tap = !isHoldMode(mainPlayerFor(slotFor(isPlayer1)));
+
+		auto checkpoint = pl->createCheckpoint();
+		if (!checkpoint) return 0;
+		checkpoint->retain();
+
+		auto savedQueue = m_queuedButtons;
+		bool savedDied = m_playerDied;
+
+		int chosen = 0;
+		bool found = false;
+		for (int d = 0; d <= maxDelay; ++d) {
+			if (d > 0) pl->loadFromCheckpoint(checkpoint);
+			m_queuedButtons.clear();
+			if (survivesWithDelay(d, isPlayer1, tap, horizon + d)) {
+				chosen = d;
+				found = true;
+				break;
+			}
+		}
+
+		pl->loadFromCheckpoint(checkpoint);
+		m_queuedButtons = savedQueue;
+		m_playerDied = savedDied;
+		checkpoint->release();
+
+		return found ? chosen : 0;
+	}
+
+	void schedulePress(bool isPlayer1) {
+		int slot = slotFor(isPlayer1);
+		auto& s = m_fields->sched[slot];
+		s.active = true;
+		s.isPlayer1 = isPlayer1;
+		s.releaseRequested = false;
+		s.stepsLeft = chooseDelay(isPlayer1);
 	}
 
 	void handleButton(bool down, int button, bool isPlayer1) {
-		if (!modEnabled() || button != kJump) {
+		if (g_simulating || !modEnabled() || button != kJump || !asPlayLayer()) {
 			GJBaseGameLayer::handleButton(down, button, isPlayer1);
 			return;
 		}
 
 		int slot = slotFor(isPlayer1);
-		auto& p = m_fields->pending[slot];
+		auto& s = m_fields->sched[slot];
 
 		if (!down) {
-			if (p.active) {
-				// Keep holding until the click gets used or the window ends.
-				p.released = true;
+			if (s.active) {
+				s.releaseRequested = true; // release right after our press lands
+				return;
+			}
+			if (m_fields->decisionPending[slot]) {
+				// Tap inside a single step: remember the release for after the decision.
+				s.releaseRequested = true;
 				return;
 			}
 			GJBaseGameLayer::handleButton(false, button, isPlayer1);
 			return;
 		}
 
-		// A new click while we're still holding an old one: let go first
-		// so the game sees a fresh press.
-		if (p.active && p.released) releaseSlot(slot);
-
-		GJBaseGameLayer::handleButton(true, button, isPlayer1);
-
-		bool usableNow = false;
-		for (auto player : playersFor(slot)) {
-			if (canUseClickNow(player)) usableNow = true;
+		// New press while an old one is still waiting: fire the old one now.
+		if (s.active) {
+			s.active = false;
+			GJBaseGameLayer::handleButton(true, kJump, s.isPlayer1);
+			GJBaseGameLayer::handleButton(false, kJump, s.isPlayer1);
 		}
 
-		if (usableNow) {
-			p.active = false;
-			p.released = false;
+		if (m_fields->insideStep) {
+			// We can't rewind in the middle of a step; decide right after it ends.
+			m_fields->decisionPending[slot] = true;
+			m_fields->decisionIsPlayer1[slot] = isPlayer1;
+			s.releaseRequested = false;
+			return;
 		}
-		else {
-			p.active = true;
-			p.released = false;
-			p.remaining = windowSeconds();
-			p.isPlayer1 = isPlayer1;
+
+		schedulePress(isPlayer1);
+		fireIfDue(slot);
+	}
+
+	void fireIfDue(int slot) {
+		auto& s = m_fields->sched[slot];
+		if (!s.active || s.stepsLeft > 0) return;
+		s.active = false;
+		GJBaseGameLayer::handleButton(true, kJump, s.isPlayer1);
+		if (s.releaseRequested) {
+			m_fields->releaseNextStep[slot] = true;
+			m_fields->releaseIsPlayer1[slot] = s.isPlayer1;
 		}
 	}
 
 	void processCommands(float dt, bool isHalfTick, bool isLastTick) {
-		auto& f = m_fields;
-		bool anyActive = f->pending[0].active || f->pending[1].active;
-		if (!modEnabled() || !anyActive) {
+		if (g_simulating || !modEnabled() || !asPlayLayer()) {
 			GJBaseGameLayer::processCommands(dt, isHalfTick, isLastTick);
 			return;
 		}
 
-		std::vector<std::pair<PlayerObject*, PlayerSnapshot>> before[2];
-		for (int slot = 0; slot < 2; ++slot) {
-			if (!f->pending[slot].active) continue;
-			for (auto player : playersFor(slot)) {
-				before[slot].push_back({ player, snapshot(player) });
-			}
+		auto& f = m_fields;
+
+		// Remember how the game steps so simulations step the same way.
+		f->currentFrame.push_back({ dt, isHalfTick, isLastTick });
+		if (isLastTick) {
+			f->framePattern = f->currentFrame;
+			f->currentFrame.clear();
 		}
 
+		for (int slot = 0; slot < 2; ++slot) {
+			if (f->releaseNextStep[slot]) {
+				f->releaseNextStep[slot] = false;
+				GJBaseGameLayer::handleButton(false, kJump, f->releaseIsPlayer1[slot]);
+			}
+			fireIfDue(slot);
+		}
+
+		f->insideStep = true;
 		GJBaseGameLayer::processCommands(dt, isHalfTick, isLastTick);
+		f->insideStep = false;
+
+		f->stepInFrame = isLastTick ? 0 : f->stepInFrame + 1;
 
 		for (int slot = 0; slot < 2; ++slot) {
-			auto& p = f->pending[slot];
-			if (!p.active) continue;
-
-			bool used = false;
-			for (auto& [player, snap] : before[slot]) {
-				if (clickWasUsed(snap, player)) used = true;
-			}
-
-			if (used) {
-				// The buffered click did its one job; stop holding right away.
-				releaseSlot(slot);
+			auto& s = f->sched[slot];
+			if (f->decisionPending[slot]) {
+				// The press came in during this step; delay 0 means the start of the next one.
+				f->decisionPending[slot] = false;
+				bool wantsRelease = s.releaseRequested;
+				schedulePress(f->decisionIsPlayer1[slot]);
+				s.releaseRequested = wantsRelease;
 				continue;
 			}
-
-			p.remaining -= dt;
-			if (p.remaining <= 0.f) releaseSlot(slot);
+			if (s.active && s.stepsLeft > 0) s.stepsLeft--;
 		}
 	}
 
 	void clearBuffers() {
-		releaseSlot(0);
-		releaseSlot(1);
+		auto& f = m_fields;
+		for (int slot = 0; slot < 2; ++slot) {
+			f->sched[slot] = {};
+			f->releaseNextStep[slot] = false;
+			f->decisionPending[slot] = false;
+		}
 	}
 };
 
@@ -202,6 +267,20 @@ class $modify(BufferedPlayLayer, PlayLayer) {
 			m_isTestMode = true;
 		}
 		return true;
+	}
+
+	void destroyPlayer(PlayerObject* player, GameObject* object) {
+		if (g_simulating) {
+			// The hidden anti-cheat spike isn't a real death.
+			if (object != m_anticheatSpike) g_simDied = true;
+			return;
+		}
+		PlayLayer::destroyPlayer(player, object);
+	}
+
+	void levelComplete() {
+		if (g_simulating) return;
+		PlayLayer::levelComplete();
 	}
 
 	void resetLevel() {
