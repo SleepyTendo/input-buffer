@@ -1,13 +1,19 @@
 # Input Buffer
 
-Click a little too early and it still counts. If you click while the click
-can't do anything yet (in the air as cube, robot, ball or spider, and not
-touching an orb), the mod remembers it for 2 to 8 frames. The moment you
-land or reach an orb inside that window, the click is used once. It never
-turns into an extra jump, and if the window runs out the click is dropped.
+Clicked a few frames too early? This mod moves your click to the exact
+frame that survives.
 
-- **Buffer Window**: 2-8 frames at 60 FPS (about 33-133 ms).
-- Ship, wave, UFO and swing aren't buffered, since a click already does
-  something there.
-- **Safe Mode** (on by default): plays levels in test mode so runs with the
-  buffer aren't saved as real completions.
+When you click, the mod saves the level state and quickly simulates the
+next moment with your click placed 0, 1, 2 ... up to your setting frames
+later. It picks the earliest frame where you survive, rewinds, and plays
+your click on that frame. If you were too early even for your setting, the
+click happens normally and you die like vanilla.
+
+- **Max Early Frames**: 2-8.
+- **Frame Unit**: 240 (GD physics steps) or 60 (60 FPS frames).
+- **Look-ahead**: how far ahead survival is checked (default 90 steps,
+  about 0.4 s). Higher is safer but heavier.
+- **Safe Mode** (on by default): runs in test mode so nothing saves as a
+  real completion.
+
+Ship, wave and swing clicks are simulated as held; other modes as taps.
