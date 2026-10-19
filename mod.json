@@ -8,9 +8,9 @@
 	},
 	"id": "sleepytendo.input-buffer",
 	"name": "Input Buffer",
-	"version": "v1.1.0",
+	"version": "v2.0.0",
 	"developer": "SleepyTendo",
-	"description": "Remembers early clicks for 2-8 frames and uses them the moment you can jump.",
+	"description": "Clicked a few frames early? Shifts your click to the exact frame that survives.",
 	"settings": {
 		"enabled": {
 			"type": "bool",
@@ -19,11 +19,33 @@
 		},
 		"extra-frames": {
 			"type": "int",
-			"name": "Buffer Window (frames)",
-			"description": "How early (in 60 FPS frames) you can click before landing or reaching an orb and still have the click count. The click is used once, never as an extra jump.",
+			"name": "Max Early Frames",
+			"description": "How many frames early a click can be and still get moved to the frame that survives. 9 frames early with this set to 8 still dies.",
 			"default": 4,
 			"min": 2,
 			"max": 8,
+			"control": {
+				"arrows": true,
+				"slider": true
+			}
+		},
+		"frame-unit": {
+			"type": "string",
+			"name": "Frame Unit",
+			"description": "What a frame means. 240 = GD physics steps (use for 240 FPS frame perfects). 60 = 60 FPS frames (4 physics steps each).",
+			"default": "240 (physics steps)",
+			"one-of": [
+				"240 (physics steps)",
+				"60 (frames)"
+			]
+		},
+		"look-ahead": {
+			"type": "int",
+			"name": "Look-ahead (steps)",
+			"description": "How far ahead the mod checks that you survive, in physics steps (240 = 1 second). Higher catches more but can cause a small hitch on each click.",
+			"default": 90,
+			"min": 30,
+			"max": 240,
 			"control": {
 				"arrows": true,
 				"slider": true
