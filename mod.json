@@ -8,7 +8,7 @@
 	},
 	"id": "sleepytendo.input-buffer",
 	"name": "Input Buffer",
-	"version": "v2.0.0",
+	"version": "v2.1.0",
 	"developer": "SleepyTendo",
 	"description": "Clicked a few frames early? Shifts your click to the exact frame that survives.",
 	"settings": {
@@ -20,7 +20,7 @@
 		"extra-frames": {
 			"type": "int",
 			"name": "Max Early Frames",
-			"description": "How many frames early a click can be and still get moved to the frame that survives. 9 frames early with this set to 8 still dies.",
+			"description": "How many frames early a click can be and still get moved to the frame that survives. 9 frames early with this set to 8 still dies. Higher values cost more per click.",
 			"default": 4,
 			"min": 2,
 			"max": 8,
@@ -42,8 +42,8 @@
 		"look-ahead": {
 			"type": "int",
 			"name": "Look-ahead (steps)",
-			"description": "How far ahead the mod checks that you survive, in physics steps (240 = 1 second). Higher catches more but can cause a small hitch on each click.",
-			"default": 90,
+			"description": "How far ahead the mod checks that you survive, in physics steps (240 = 1 second). Higher catches more but costs more per click. If clicks stutter, lower this.",
+			"default": 45,
 			"min": 30,
 			"max": 240,
 			"control": {
