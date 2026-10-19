@@ -11,8 +11,8 @@ click happens normally and you die like vanilla.
 
 - **Max Early Frames**: 2-8.
 - **Frame Unit**: 240 (GD physics steps) or 60 (60 FPS frames).
-- **Look-ahead**: how far ahead survival is checked (default 90 steps,
-  about 0.4 s). Higher is safer but heavier.
+- **Look-ahead**: how far ahead survival is checked (default 45 steps,
+  about 0.2 s). Higher is safer but heavier.
 - **Safe Mode** (on by default): runs in test mode so nothing saves as a
   real completion.
 
