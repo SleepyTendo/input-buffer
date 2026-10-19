@@ -8,9 +8,9 @@
 	},
 	"id": "sleepytendo.input-buffer",
 	"name": "Input Buffer",
-	"version": "v1.0.0",
+	"version": "v1.1.0",
 	"developer": "SleepyTendo",
-	"description": "Holds your clicks for 2-8 extra frames so early taps still count.",
+	"description": "Remembers early clicks for 2-8 frames and uses them the moment you can jump.",
 	"settings": {
 		"enabled": {
 			"type": "bool",
@@ -19,18 +19,15 @@
 		},
 		"extra-frames": {
 			"type": "int",
-			"name": "Extra Frames",
-			"description": "How many extra frames (at 60 FPS) each click is held for after you let go.",
+			"name": "Buffer Window (frames)",
+			"description": "How early (in 60 FPS frames) you can click before landing or reaching an orb and still have the click count. The click is used once, never as an extra jump.",
 			"default": 4,
 			"min": 2,
 			"max": 8,
-			"control": { "arrows": true, "slider": true }
-		},
-		"buffer-movement": {
-			"type": "bool",
-			"name": "Buffer Platformer Movement",
-			"description": "Also delay releasing left/right in platformer mode. Off by default because it makes you slide.",
-			"default": false
+			"control": {
+				"arrows": true,
+				"slider": true
+			}
 		},
 		"safe-mode": {
 			"type": "bool",
