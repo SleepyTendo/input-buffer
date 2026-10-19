@@ -27,6 +27,9 @@ static int maxDelaySteps() {
 	return static_cast<int>(frames) * stepsPerFrame;
 }
 
+// Most simulated physics steps allowed per click (about 1.25 s of game time).
+constexpr int kStepBudget = 300;
+
 static int lookAheadSteps() {
 	return static_cast<int>(Mod::get()->getSettingValue<int64_t>("look-ahead"));
 }
@@ -91,18 +94,22 @@ class $modify(BufferedLayer, GJBaseGameLayer) {
 	}
 
 	// Run the vanilla step, bypassing our own processCommands logic.
+	// Simulated steps never count as the last step of a frame, which skips
+	// the visual-only work the game does once per rendered frame.
 	void rawStep(StepArgs const& a) {
-		GJBaseGameLayer::processCommands(a.dt, a.half, a.last);
+		GJBaseGameLayer::processCommands(a.dt, a.half, false);
 	}
 
 	// Simulate placing the press `delay` steps from now. True if the player survives.
-	bool survivesWithDelay(int delay, bool isPlayer1, bool tap, int horizon) {
+	// `budget` is the number of simulated steps left for this click; it is reduced as we go.
+	bool survivesWithDelay(int delay, bool isPlayer1, bool tap, int horizon, int& budget) {
 		g_simDied = false;
 		g_simulating = true;
 		for (int k = 0; k < horizon; ++k) {
 			if (k == delay) GJBaseGameLayer::handleButton(true, kJump, isPlayer1);
 			if (tap && k == delay + 1) GJBaseGameLayer::handleButton(false, kJump, isPlayer1);
 			rawStep(simArgs(k));
+			--budget;
 			if (g_simDied) break;
 		}
 		g_simulating = false;
@@ -125,12 +132,21 @@ class $modify(BufferedLayer, GJBaseGameLayer) {
 		auto savedQueue = m_queuedButtons;
 		bool savedDied = m_playerDied;
 
+		// Hard cap on work per click so a click never freezes the game.
+		// Rewinding costs about as much as a few dozen steps, so it's charged too.
+		constexpr int kRewindCost = 20;
+		int budget = kStepBudget;
+
 		int chosen = 0;
 		bool found = false;
 		for (int d = 0; d <= maxDelay; ++d) {
-			if (d > 0) pl->loadFromCheckpoint(checkpoint);
+			if (budget < horizon + d) break; // not enough left to test this one properly
+			if (d > 0) {
+				pl->loadFromCheckpoint(checkpoint);
+				budget -= kRewindCost;
+			}
 			m_queuedButtons.clear();
-			if (survivesWithDelay(d, isPlayer1, tap, horizon + d)) {
+			if (survivesWithDelay(d, isPlayer1, tap, horizon + d, budget)) {
 				chosen = d;
 				found = true;
 				break;
@@ -261,6 +277,13 @@ class $modify(BufferedLayer, GJBaseGameLayer) {
 };
 
 class $modify(BufferedPlayLayer, PlayLayer) {
+	// Deaths inside our test runs must be caught before any other mod
+	// (Mega Hack etc.) sees them, or a simulated death becomes a real one.
+	static void onModify(auto& self) {
+		(void)self.setHookPriority("PlayLayer::destroyPlayer", Priority::FirstPre);
+		(void)self.setHookPriority("PlayLayer::levelComplete", Priority::FirstPre);
+	}
+
 	bool init(GJGameLevel* level, bool useReplay, bool dontCreateObjects) {
 		if (!PlayLayer::init(level, useReplay, dontCreateObjects)) return false;
 		if (modEnabled() && Mod::get()->getSettingValue<bool>("safe-mode")) {
