@@ -1,0 +1,43 @@
+{
+	"geode": "5.11.2",
+	"gd": {
+		"win": "2.2081",
+		"mac": "2.2081",
+		"android": "2.2081",
+		"ios": "2.2081"
+	},
+	"id": "sleepytendo.input-buffer",
+	"name": "Input Buffer",
+	"version": "v1.0.0",
+	"developer": "SleepyTendo",
+	"description": "Holds your clicks for 2-8 extra frames so early taps still count.",
+	"settings": {
+		"enabled": {
+			"type": "bool",
+			"name": "Enabled",
+			"default": true
+		},
+		"extra-frames": {
+			"type": "int",
+			"name": "Extra Frames",
+			"description": "How many extra frames (at 60 FPS) each click is held for after you let go.",
+			"default": 4,
+			"min": 2,
+			"max": 8,
+			"control": { "arrows": true, "slider": true }
+		},
+		"buffer-movement": {
+			"type": "bool",
+			"name": "Buffer Platformer Movement",
+			"description": "Also delay releasing left/right in platformer mode. Off by default because it makes you slide.",
+			"default": false
+		},
+		"safe-mode": {
+			"type": "bool",
+			"name": "Safe Mode",
+			"description": "Runs levels in test mode so completions and percentages aren't saved while the buffer is on.",
+			"default": true
+		}
+	}
+}
+{"geode":"5.11.2","gd":{"win":"2.2081","mac":"2.2081","android":"2.2081","ios":"2.2081"},"id":"sleepytendo.input-buffer","name":"Input Buffer","version":"v1.0.0","developer":"SleepyTendo","description":"Holds your clicks for 2-8 extra frames so early taps still count.","settings":{"enabled":{"type":"bool","name":"Enabled","default":true},"extra-frames":{"type":"int","name":"Extra Frames","description":"How many extra frames (at 60 FPS) each click is held for after you let go.","default":4,"min":2,"max":8,"control":{"arrows":true,"slider":true}},"buffer-movement":{"type":"bool","name":"Buffer Platformer Movement","description":"Also delay releasing left/right in platformer mode. Off by default because it makes you slide.","default":false},"safe-mode":{"type":"bool","name":"Safe Mode","description":"Runs levels in test mode so completions and percentages aren't saved while the buffer is on.","default":true}}}
